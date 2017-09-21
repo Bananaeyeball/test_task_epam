@@ -13,11 +13,11 @@ class CsvExporter
     Net::SFTP.start(@sftp_server, 'some-ftp-user', keys: ['path-to-credentials']) do |sftp|
       sftp_entries = sftp.dir.entries('/data/files/csv').map(&:name).sort
       sftp_entries.each do |entry|
-        next unless entry[-4, 4] == '.csv' || sftp_entries.include?(entry + '.start')
+        next unless entry[-4, 4] == '.csv' || sftp_entries.include?("#{entry}.start")
 
         file_local = "#{Rails.root}/private/data/download/#{entry}"
 
-        handle_file_remote(entry, file_local)
+        handle_file_remote(entry, file_local, sftp)
 
         result = import(file_local)
 
@@ -27,7 +27,7 @@ class CsvExporter
     end
   end
 
-  def self.handle_file_remote(entry, file_local)
+  def self.handle_file_remote(entry, file_local, sftp)
     file_remote = "/data/files/csv/#{entry}"
 
     sftp.download!(file_remote, file_local)
@@ -54,6 +54,7 @@ class CsvExporter
   end
 
   def self.import(file, validation_only = false)
+    @errors = []
     result = begin
                import_file(file, validation_only)
              rescue => e
@@ -77,7 +78,6 @@ class CsvExporter
   end
 
   def self.import_file(file, validation_only = false)
-    @errors = []
     line = 2
     source_path = "#{Rails.root}/private/upload"
     path_and_name = "#{source_path}/csv/tmp_mraba/DTAUS#{Time.now.strftime('%Y%m%d_%H%M%S')}"
@@ -89,6 +89,7 @@ class CsvExporter
                                             8_888_888_888,
                                             99_999_999,
                                             'Credit collection')
+
     success_rows = []
     import_rows =
       CSV.read(file, col_sep: ';', headers: true, skip_blanks: true).map do |r|
@@ -162,10 +163,7 @@ class CsvExporter
   def self.get_sender(row)
     sender = Account.find_by_account_no(row['SENDER_KONTO'])
 
-    if sender.blank?
-      @errors << "#{row['ACTIVITY_ID']}: Account #{row['SENDER_KONTO']} not found"
-    end
-
+      @errors << "#{row['ACTIVITY_ID']}: Account #{row['SENDER_KONTO']} not found" if sender.nil?
     sender
   end
 

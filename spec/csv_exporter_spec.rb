@@ -14,6 +14,7 @@ describe CsvExporter do
       FileUtils.mkdir_p download_folder
       FileUtils.cp "#{Rails.root}/spec/fixtures/csv_exporter.csv", "#{download_folder}/mraba.csv"
     end
+
     after(:all) do
       FileUtils.rm_r "#{Rails.root}/private"
     end
@@ -22,7 +23,7 @@ describe CsvExporter do
       entries = ['mraba.csv', 'mraba.csv.start', 'blubb.csv']
       sftp_mock = double('sftp')
       Net::SFTP.stub(:start).and_yield(sftp_mock)
-      sftp_mock.stub_chain(:dir, :entries, :map).and_return(entries)
+      sftp_mock.stub_chain(:dir, :entries, :map, :sort).and_return(entries)
       sftp_mock.stub(:download!).with('/data/files/csv/mraba.csv', "#{Rails.root}/private/data/download/mraba.csv")
       sftp_mock.stub(:remove!).with('/data/files/csv/mraba.csv.start')
       sftp_mock.stub(:upload!).with("#{Rails.root}/private/data/upload/mraba.csv", '/data/files/batch_processed/mraba.csv').once
@@ -30,28 +31,19 @@ describe CsvExporter do
 
     it 'fails transfers and imports mraba csv  ' do
       CsvExporter.should_receive(:upload_error_file).once.and_call_original
-      File.should_receive(:open).with("#{Rails.root}/private/data/download/mraba.csv",
-                                      {universal_newliner: false,
-                                      col_sep: ';',
-                                      headers: true,
-                                      skip_blanks: true}).once.and_call_original
-
+      File.should_receive(:open).with("#{Rails.root}/private/data/download/mraba.csv", universal_newline: false, col_sep: ';', headers: true, skip_blanks: true).once.and_call_original
       File.should_receive(:open).with("#{Rails.root}/private/data/upload/mraba.csv", 'w').once.and_call_original
       CsvExporter.transfer_and_import
     end
 
     it 'fails transfers and imports mraba csv' do
       file_to_upload = double('file to upload')
-      File.should_receive(:open).with("#{Rails.root}/private/data/download/mraba.csv", {universal_newline: false, col_sep: ';', headers: true, skip_blanks: true}).once.and_call_original
+      File.should_receive(:open).with("#{Rails.root}/private/data/download/mraba.csv", universal_newline: false, col_sep: ';', headers: true, skip_blanks: true).once.and_call_original
 
       File.should_receive(:open).with("#{Rails.root}/private/data/upload/mraba.csv", 'w').once.and_yield(file_to_upload)
       file_to_upload.should_receive(:write).once
       CsvExporter.should_receive(:upload_error_file).once.and_call_original
-      BackendMailer.should_receive(:send_import_feedback).with(
-        'Import CSV failed',
-        'Import of the file mraba.csv failed with errors:'\
-        '\nImported:  Errors: 01: UMSATZ_KEY 06 is not allowed; 01: Transaction type not found'
-      )
+      BackendMailer.should_receive(:send_import_feedback).with('Import CSV failed', "Import of the file mraba.csv failed with errors:\nImported:  Errors: 01: UMSATZ_KEY 06 is not allowed")
 
       CsvExporter.transfer_and_import
     end
@@ -72,7 +64,7 @@ describe CsvExporter do
         'DESC1' => 'Geld senden'
       }
 
-      CSV.stub_chain(:read, :map).and_return [ ['123', data ] ]
+      CSV.stub_chain(:read, :map).and_return [['123', data]]
 
       BackendMailer.should_receive(:send_import_feedback)
       CsvExporter.transfer_and_import.should be_nil
@@ -102,7 +94,7 @@ describe CsvExporter do
       }
 
       CsvExporter.stub(:add_account_transfer).and_return(true)
-      CsvExporter.import_file_row_with_error_handling(row, false, @errors, @dtaus).should == [@errors,@dtaus]
+      CsvExporter.import_file_row_with_error_handling(row, false, @dtaus).should == true
       CsvExporter.import_retry_count.should == 1
     end
 
@@ -114,8 +106,8 @@ describe CsvExporter do
       }
 
       CsvExporter.stub(:add_account_transfer).and_raise(RuntimeError)
-      CsvExporter.import_file_row_with_error_handling(row, false, @errors, @dtaus)[0].should == ['1: RuntimeError']
-      CsvExporter.import_retry_count.should == 1
+      CsvExporter.import_file_row_with_error_handling(row, false, @dtaus)[0].should == '1: RuntimeError'
+      CsvExporter.import_retry_count.should == 5
     end
   end
 
@@ -163,29 +155,25 @@ describe CsvExporter do
   describe '.add_account_transfer(row, validation_only)' do
     before(:each) do
       @account = double :account_no => '000000001'
-      @row = { 'AMOUNT' => 10,
-               'ENTRY_DATE' => Date.today,
-               'DESC1' => 'Subject',
-               'SENDER_KONTO' => '000000001',
-               'RECEIVER_KONTO' => '000000002' }
+      @row = { 'AMOUNT' => 10, 'ENTRY_DATE' => Date.today, 'DESC1' => 'Subject', 'SENDER_KONTO' => '000000001', 'RECEIVER_KONTO' => '000000002' }
       Account.stub(:find_by_account_no).with('000000001').and_return @account
-      @account_transfer = double :date= => nil, :skip_mobile_tan= => nil, :valid? => nil, :errors => double(:full_messages => []), :save! => true
+      @account_transfer = double :date= => nil, :skip_mobile_tan= => nil, :valid? => nil, errors: double(:full_messages => []), :save! => true
       @account.stub_chain :credit_account_transfers, build: @account_transfer
     end
 
     it 'adds account_transfer (DEPOT_ACTIVITY_ID is blank)' do
-      @account_transfer.stub valid?: true
+      @account_transfer.stub :valid? => true
       CsvExporter.add_account_transfer(@row, false).should be true
     end
 
     it 'fails to add a account_transfer (missing attribute)' do
       @row['AMOUNT'] = nil
-      CsvExporter.add_account_transfer(@row, false).should be_kind_of(Array)
+      CsvExporter.add_account_transfer(@row, false).should be_kind_of(String)
     end
 
     it 'fails to add a account_transfer (missing attribute, validation only)' do
       @row['AMOUNT'] = nil
-      CsvExporter.add_account_transfer(@row, true).should be_kind_of(Array)
+      CsvExporter.add_account_transfer(@row, true).should be_kind_of(String)
     end
 
     it 'returns error' do
@@ -195,8 +183,8 @@ describe CsvExporter do
 
     context 'DEPOT_ACTIVITY_ID is not blank' do
       before(:each) do
-        @account_transfer.stub :id => 1, :state => 'pending', :subject= => nil, :valid? => true, :complete_transfer! => true
-        @account.stub_chain :credit_account_transfers, :find_by_id => @account_transfer
+        @account_transfer.stub id: 1, state: 'pending', :subject= => nil, :valid? => true, :complete_transfer! => true
+        @account.stub_chain :credit_account_transfers, find_by_id: @account_transfer
       end
 
       it 'finds and validates account_transfer' do
@@ -209,14 +197,14 @@ describe CsvExporter do
 
       it 'fails to find account transfer' do
         @row['DEPOT_ACTIVITY_ID'] = '12345'
-        @account.stub_chain :credit_account_transfers, :find_by_id => nil
-        CsvExporter.add_account_transfer(@row, false).should be nil
+        @account.stub_chain :credit_account_transfers, find_by_id: nil
+        CsvExporter.add_account_transfer(@row, false).should be_kind_of(String)
       end
 
       it 'finds account transfer, but is not in pending state' do
         @account_transfer.stub :state => 'initialized'
         @row['DEPOT_ACTIVITY_ID'] = @account_transfer.id
-        CsvExporter.add_account_transfer(@row, false).should be nil
+        CsvExporter.add_account_transfer(@row, false).should be_kind_of(String)
       end
     end
   end
@@ -224,14 +212,9 @@ describe CsvExporter do
 
   describe '.add_bank_transfer(row, validation_only)' do
     before(:each) do
-      @row = { 'AMOUNT' => 10,
-               'RECEIVER_NAME' => 'Bob Baumeiter',
-               'RECEIVER_BLZ' => '2222222',
-               'DESC1' => 'Subject',
-               'SENDER_KONTO' => '000000001',
-               'RECEIVER_KONTO' => '000000002' }
+      @row = { 'AMOUNT' => 10, 'RECEIVER_NAME' => 'Bob Baumeiter', 'RECEIVER_BLZ' => '2222222', 'DESC1' => 'Subject', 'SENDER_KONTO' => '000000001', 'RECEIVER_KONTO' => '000000002' }
       bank_transfer = double :valid? => true, :save! => true
-      @account = double :build_transfer => bank_transfer
+      @account = double build_transfer: bank_transfer
     end
 
     it 'adds bank transfer' do
@@ -248,15 +231,7 @@ describe CsvExporter do
 
   describe '.add_dta_row(dta, row, validation_only)' do
     before(:each) do
-      @row = { 'ACTIVITY_ID' => '1',
-               'AMOUNT' => '10',
-               'RECEIVER_NAME' => 'Bob Baumeiter',
-               'RECEIVER_BLZ' => '70022200',
-               'DESC1' => 'Subject',
-               'SENDER_KONTO' => '0101881952',
-               'SENDER_BLZ' => '30020900',
-               'SENDER_NAME' => 'Max Müstermänn',
-               'RECEIVER_KONTO' => 'NO2' }
+      @row = { 'ACTIVITY_ID' => '1', 'AMOUNT' => '10', 'RECEIVER_NAME' => 'Bob Baumeiter', 'RECEIVER_BLZ' => '70022200', 'DESC1' => 'Subject', 'SENDER_KONTO' => '0101881952', 'SENDER_BLZ' => '30020900', 'SENDER_NAME' => 'Max Müstermänn', 'RECEIVER_KONTO' => 'NO2' }
       @dtaus = double
     end
 
@@ -269,9 +244,11 @@ describe CsvExporter do
     it 'fails to adds dta row' do
       @dtaus.stub(:valid_sender?).with('0101881952', '30020900').and_return false
       @dtaus.should_not_receive(:add_buchung)
-      CsvExporter.add_dta_row(@dtaus, @row, false).last.should == '1: BLZ/Konto not valid, csv fiile not written'
+      CsvExporter.add_dta_row(@dtaus, @row, false).should == '1: BLZ/Konto not valid, csv fiile not written'
     end
+
   end
+
 
   describe '.import_subject(row)' do
     before(:each) do
@@ -282,4 +259,6 @@ describe CsvExporter do
       CsvExporter.import_subject(@row).should == 'Subject'
     end
   end
+
+
 end
